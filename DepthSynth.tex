@@ -1,0 +1,327 @@
+\documentclass{article}
+\setlength{\oddsidemargin}{1mm}
+\setlength{\evensidemargin}{1mm}
+\setlength{\textwidth}{16cm}
+
+\usepackage{graphicx}
+\usepackage{url}
+\usepackage{times}
+\begin{document}
+\title{Improving Depth Synthesis}
+\maketitle
+
+
+\section{Overview}
+
+We first present the problem statement, then a set of various ideas which
+are the possible directions for research, an unordered (and incomplete) reading list,  and some other actions. We close with the key ideas (for now).
+
+Note that this is a \emph{working document} and right now 
+these are a set of rather disconnected ideas, which 
+need to be evaluated and prioritized, and eventually merged if common
+methodologies emerge.
+
+\section{Problem statement and Context}
+\label{sec:depth-synth}
+
+\subsection{Problem Statement}
+Depth synthesis of \cite{chaurasia13} is broken in many ways:
+\begin{enumerate} 
+\item We often have ``floating depth". This can happen because the closest neighbor of an superpixel (SP) in terms of color was something at a different depth. 
+\item Another reason for ``floating depth'' is that SLIC \cite{slic12} cant do miracles, and sometimes (especially in dark regions) SP's ``bleed'' into the background. Thin structures are a particularly obvious case for this.
+\item When displaying in stereo, we clearly see the ``billboard-like'' nature of the synthesized depth.
+\end{enumerate}
+The goal is to reduce the \emph{rendering} artifacts due to depth synthesis as much as possible, especially
+to well preserve object contours, depth relationships and parallax effects (which is a fancy
+way of saying ``avoid floating SPs").
+
+
+
+\subsection{Context}
+\label{sec:context}
+As usual, we assume that we have the best reconstruction vision can give us;
+however, we need to demonstrate that the \emph{rendering} improves if the 
+3D reconstruction \emph{input} improves. 
+The goal of this project is to \emph{improve rendering quality}
+for environments with complex, typically outdoors urban (and possibly indoors) content, in
+which a lot of depth \emph{cannot} be reconstructed.
+
+To solve this problem we combine computer graphics techniques with computer vision approaches.
+In the context of \cite{chaurasia13}, four components work together to achieve the desired result:
+1) Preserving contours using SLIC~\cite{slic12}, 2) Depth synthesis to complete missing 3D,
+3) Shape preserving warp to achieve decent result when depth is missing and 4) Blending to
+``cover up'' any remaining missing information. Steps 1) and 2) are more computer vision and
+steps 3) and 4) are graphics.
+
+As a consequence, we will need a computer vision collaborator, so I suggest that TUD (M. Goesele,
+reconstruction expert) and Aziz participate in this project as ``consultants" (i.e. co-authors
+but with minimal time commitment).
+
+Another important element is to determine what distinguishes us \emph{or not} from ``pure reconstruction". The idea is to show cases when the result is \emph{unsuitable} for reconstruction (i.e., the reconstruction quality is not improved even though rendering quality is) but also cases when our result \emph{does improve} reconstruction, and just show this as a potentially interesting different research avenue.
+If the latter does happen, it is conceivable that someone at TUD could pick this up as 
+a potential project (but this is not relevant at this point in time).
+
+One way of viewing the problem is the parallel to level-of-detail (LOD) for rendering, where
+we only need to have a representation of the scene \emph{at the level required for rendering}.
+As an example, consider the work from F. Neyret ~\cite{bruneton2012real,crassin2009gigavoxels} and other volumetric methods,
+where it doesnt make sense to model every leaf in a tree to render a forest: a volumetric representation
+is sufficient. 
+Our approach is similar: we only need to generate enough depth and enough contour information (and
+whatever else we deem necessary) to achieve good quality rendering. Detailed geometric representation
+can be wasteful (large meshes) and problematic (aliasing) for complex objects, especially vegetation.
+
+\section{Ideas}
+\label{sec:depthideas}
+
+Overall, we need to pose the problem in a more consistent and formal manner, probably as an
+inference, in which the objective function is related to rendering rather than reconstruction.
+This fits perfectly with the 3DV submission methodology and fits with the pieces mentioned
+below.
+
+One key for quality is to verify that contours and depth relationships are preserved. 
+This also relates to various other ideas we have discussed concerning
+thin structures and sematic/object approaches, but we will try and keep these
+as separate topics as much as possible.
+
+\subsection{Preprocessing}
+One thing to try before anything else, is to use
+other sources of geometry (eg kinect data etc) we need to change the way the depth
+assignment and synthesis works, to identify close-to-planar regions etc. We can combine this
+with Rodrigo's algorithm to make the planar assignment robust and consistent across neighbors.
+
+Practical things that can be done are resampling of better meshes (eg CMPVS) with lower confidence
+for regions where there werent many MVS points; however this should be followed by
+an ML leave-one-out step to determine whether the estimation of geometry seems to be
+good, in which case we keep it.
+
+
+\subsection{Multi-view consistency}
+\label{sec:mvcons}
+
+The first idea is to use Multi-view consistency.
+A simple test is to first do a synthesis per view as now, then render only the synthesized depths into
+different views and optimize the depths for ``overlapping superpixels" to be the same (or vary smoothly). This should be possible to write as an optimization and hopefully this should work pretty well.
+
+The optimization can then be refined based on MAP leave one out strategy as before,
+since these are the cases that ``floating" happens and we have strong artifacts which should be easy to catch using our current framework.
+The exact form of the optimization is tricky and will require some work.
+We need to determine what it is we are optimizing exactly, the properties
+of the energy concerned etc.
+A key element is the determination of what consitutes ``good quality rendering'', beyond
+just reprojection. For example, we need to formalize what exactly the shape preserving
+warp does in terms of visual quality (compared to reprojection and MSE).
+See also the comments on image quality in the rendering section below (Sec.~\ref{sec:render}).
+
+Note that speed is a central issue here: we need to be able to re-render and
+compare the result very quickly to achieve depth optimization, 
+so we may need to do some kind of
+CUDA-based optimization combined with rendering steps (this requires
+investigation).
+
+Another issue is how to link superpixels between views, since (by definition) these are
+superpixels without depth. This is one element that shows that there is a strong
+link between this section and the work on improving SLIC below (Sec.~\ref{sec:imslic}).
+
+
+\subsection{Improving SLIC}
+\label{sec:imslic}
+The ideas here are related to the development of higher-level segmentation.
+Here we concentrate simply on determining cases when SLIC does not cut important
+borders rather than identifying when things should stay together, 
+which is the ``semantic grouping'' problem we will (at least initially) \emph{not} treat here.
+
+I had noted various segmentation algorithms, which need to be read and understood more
+carefully, to see whether they make sense. Geodesic approaches might (nor might not) help. Here are some ideas of things to investigate:
+\begin{itemize}
+\item Finding piecewise planar regions (L0 image filtering/abstraction \cite{xu2011image}) could help in this case, as could a semantic approach. Local linear embedding \cite{chen2012manifold} (among others) the idea is to avoid crossing such a boundary.
+\item geodesic image filtering \cite{criminisi2010geodesic}; online code for \cite{gulshan2010geodesic}. Initial tests with star-shaped paper \cite{gulshan2010geodesic} work well, but would need to think about new segmentation, probably not a good plan. These require user input so we would have to probably combine these with the semantic segmentation or some learning approach.
+\item Using the occluding contour approach \cite{shan2014occluding}, and notably the gPb contour strength measure they use to help improve SLIC errors. The idea of free space preservation is important.
+\item Multi-view SLIC for rendering. Discuss with Aziz about how some
+of his ideas could potentially be adapted to improve the result of SLIC, always
+in the \emph{goal of improving rendering}.
+One potential approach involves multi-view superpixels (see reading list).
+\end{itemize}
+
+A similar strategy as above (Sec. ~\ref{sec:mvcons}) is potentially a good strategy: optimize the superpixels as a function of the improvement in quality of rendering. A similar optimization strategy could be adopted, and again all of the details need to be determined (and there are lots).
+
+\subsection{Rendering}
+\label{sec:render}
+
+For both multi-view consistent depth synthesis and SLIC improvement, we need to always develop solutions
+in parallel to \emph{rendering}. The idea is to adapt the information provided by these earlier steps
+for warping and blending, and also to develop new warping and blending strategies that take
+into account the new information. This will be a central element of all solutions proposed,
+and will be done in parallel with the steps above (Sec.~\ref{sec:mvcons} and \ref{sec:imslic}).
+
+The LOD analogy (Sec.~\ref{sec:context}) is interesting, and should be further developed, since it can be a good
+basis to determine what is important for rendering. We need to clarify and formalize what
+is important to preserve, e.g., contours and relationships between contours, depth
+ordering rather than absolute measurements etc, which can then be used to determine new
+approaches for the warp and for the blending steps.
+This can also be seen as an important step in the definition of \emph{rendering quality}
+which is required for the optimization above as well.
+
+
+\subsection{Other ideas}
+
+Another idea would be to use geolocalisation to find images similar (trees etc), reconstruct a few specific ones in high detail and then use these as templates for better depth synthesis. This could take the form of some probabilistic inference, depending on the decisions that need to be made.
+
+Finally, even though the goal is to keep this project separate from semantic grouping for segmentation and thin structures, if we realize that one of these problems is completely blocking advancement (e.g., it is impossible to treat a meaningful scene without  dealing with one of these) we need to re-adapt our strategy.
+
+\section{Reading List}
+\begin{itemize}
+\item Completely understand SLIC \cite{slic12}, and any potential improvements. Check out the GPU version (gSLIC on github), since we need to do SLIC in the inner loop of an optimization. Also better understand how multi-view SLIC works (check out video-based SLIC that Aziz showed us).
+\item Geodesic \cite{criminisi2010geodesic}, Star \cite{gulshan2010geodesic} -- code online, Seitz \cite{shan2014occluding} , Lafarge \cite{lafarge2013hybrid}, L0 \cite{xu2011image}, LLE \cite{chen2012manifold} 
+\item Read the papers of volumetric LOD \cite{bruneton2012real,crassin2009gigavoxels} and other related papers.
+\item We need to check the 2015 Vangool paper~\cite{bodis2015superpixel} which aligns the mesh to the image
+contours, also check Koltuns new paper \cite{vlad15}.
+\item We need to better understand reconstruction algorithms, notably PMVS, Goesele and CMPVS.
+\end{itemize}
+
+\section{Other actions}
+
+Need to think about which steps above could benefit from synthetic data being used in the context of similar scenes. I think that it is in general a good idea to do this for this (and all other similar) projects, so we should think about how to proceed (generating datasets, tools for using them etc. -- see below).
+
+
+\section{Key Idea(s)}
+\begin{itemize}
+\item Use rendering-based optimization for all steps. Three potential axes for this:
+\begin{itemize}
+\item Multi-view approach to depth synthesis
+\item Improved (multi-view) SLIC
+\item Improved rendering steps
+\end{itemize}
+\end{itemize}
+
+\section{Appendix: Synthetic Ground Truth Datasets}
+We can produce extremely high quality renderings using path-tracing and (highly detailed, expensive) 
+hand crafted models (e.g., evermotion.org etc.) or procedurally generated vegetation (XFrog). These provide ground truth for everything, geometry, materials and lighting, and the various steps in lighting. Renderings have been used before in vision (eg Aubry \cite{aubry2014painting} or KUL car paper\cite{rematas2014image}) but usually just for classification that does not require high quality \emph{realistic} imagery (esp. geometry and lighting details that are accurate).
+
+Building these scenes is a non trivial task, since we need to deal with the problems of materials, and compatibility between models if we want e.g., to change the type of trees (from xfrong) in a given urban scene 
+(from everymotion). These two practical problems will require some work.
+
+We then need to write software to automatically evaluate the quality of the various algorithms.
+We could eg run SLIC on one of these datasets, and then see if all objects are all within the same
+superpixels or whether an object crosses a boundary.
+
+We also need ways to easily vary parameters to generate the data we need (various kinds of
+degradations) and interchange the data from capture and the synthetic data easily
+(easy alignment etc).
+
+One thing that needs clarification is what exactly are the inputs and outputs.
+
+AB: Check out differentiable rendering \cite{loper2014opendr}.
+
+\section{Appendix: High level new ideas and discution. }
+
+\section{Appendix: Reading}
+
+
+\subsection{ \cite{bodis2015superpixel} }
+
+Luc Van Gool proposes a reconstruction algorithm with similar reconstruction quality that classic MVS algorithm but with more compact meshes (~100 factor) and faster processing in order of magnitude. Method stages:
+
+\begin{enumerate} 
+	\item Cluster SfM points (control points) to group and identify disconnected 3D structures. 
+	\item Independently from SfM, extract a 2D base mesh aligned to image gradients. 
+	\item Vertex depths are calculated using the control points as soft-constraints and favoring local smoothness. 
+\end{enumerate} 
+
+Starting with a Image-drive 2D triangulation and then assign depth to vertices of the triangulation. 
+An image-driven triangulation align mesh edges to image edges and mesh faces cover textureless regions which is desirable property for building and man made objects. Relax the requerement of a single plane per Superpixels (we had planar spixels) and fronto-parallel (distinct from Zitcnick). Instead the elementary unit are the triangles. The energy formulation has a fititng term and a smoothness. Smoothness term penalizes curvature.
+
+\subsubsection*{Clustering and 2D shape analysis of stage no. 1.} 
+It does not work for the whole image. To avoid undesirable closing discontinuities, apply a conservative strategy: identify clusters with enough SfM support per view. Then reconstruct each of these regions separately.
+
+\subsubsection*{Issues}
+\begin{itemize}
+	\item blending or merging  
+	\item rely in clustering... depends in show the sfm ...
+	\item actually it has more hole than traditional MVS. 
+\end{itemize}
+
+Item 2. can be a good idea.
+ 
+\subsection{ \cite{vlad15} }
+
+Inputs: images + fewer 3D models of an instance.
+Image preprocessing...
+
+\begin{enumerate}
+	\item Camera pose estimation for natural images.
+	\item Correspondence structure via a dense network of patches that interconnect natural images and rendered images. Then Joint image segmentation. 
+	\item 3D reconstruction of each natural image using parts from pre-existing models
+\end{enumerate}
+
+\subsubsection*{ Camera pose estimation }
+For each image in I. CRF that links natural images to each other and to rendered images, based on image appearance descriptors (HOG). 
+
+\subsubsection*{ Dense Correspondences and Segmentation of parts }
+Given the estimated camera poses for all images, compute dense pixel-level correspondences between image patches. The correspondences connect the image sets I and R, ultimately enabling inference about the three-dimensional structure of objects depicted in natural images. Segment I and R and use the segementation of R to segment the shapes.
+
+Issues
+-> slow.
+->many risks
+
+\subsubsection*{ Reconstruction }
+
+The final stage of the pipeline creates a 3D model M for each image I. The model is composed of a set of parts. This set is initialized by retrieving the shape part associated with each image segment. Each part carries over its initial pose from its source shape.
+
+\subsection{ Reconstruction: \cite{shan2014occluding} }
+
+MVS algorithms results in unsatisfactory geometry reconstructions. The failure shows up as noisy surface details and boundary artifacts. 
+Solution
+Estimating dense visibility information from occluding contours.
+
+Contributions
+This work leverages occluding contours (aka “internal contours”) to improve the
+performance of MVS methods. The contributions are
+\begin{itemize}
+	\item identifying free-space regions arising from occluding contours,
+	\item incorporating the free-space constraints into Poisson surface reconstruction.	
+\end{itemize}
+
+\subsubsection*{Prepocessing}
+\begin{enumerate}
+	\item Run PMVS and Reconstruction.
+	\item Silhouettes detection with gPb.
+	\item sky seeding 
+		\begin{enumerate}
+			\item geometry reasoning from initial Poisson mesh
+			\item color reasoning (gray or blue)
+		\end{enumerate}
+\end{enumerate}
+
+\subsubsection*{Interpolating depth maps}
+
+\subsubsection*{Augmenting 3D points}
+
+\begin{enumerate}
+	\item Combining all per-view point sets
+	\item Removing points
+	\begin{enumerate}
+		\item low confidence
+		\item in the free space (significant visibility conflict).
+		\item not on the surface
+	\end{enumerate}
+	\item Adding original PMVS points back.
+\end{enumerate}
+
+\subsubsection*{Constructing free space volume}
+
+\begin{enumerate}
+	\item Back-project interpolated depth maps
+	\item Vote for free voxels based on accumulated confid
+\end{enumerate}
+
+\subsubsection*{Enhanced Poisson reconstruction}
+Add to the poisson energy, augmented point set, the free space volume constrains. 
+
+\subsection{ \cite{rematas2014image} }
+
+
+
+\bibliographystyle{alpha}
+\bibliography{prosp}
+
+\end{document}
